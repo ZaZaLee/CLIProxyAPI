@@ -23,7 +23,7 @@ HARBOR_USERNAME="${HARBOR_USERNAME:-admin}"
 HARBOR_PASSWORD="${HARBOR_PASSWORD:-tG8dS1mP6yA0tB9x}"
 HARBOR_PROJECT="${HARBOR_PROJECT:-ai}"
 IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-cli-proxy-api}"
-TAG="${TAG:-soda-test}"
+TAG="${TAG:-ai-sig}"
 
 CONTAINERD_SOCK="${CONTAINERD_SOCK:-unix:///run/k3s/containerd/containerd.sock}"
 CONTAINERD_NAMESPACE="${CONTAINERD_NAMESPACE:-k8s.io}"
@@ -42,6 +42,7 @@ KUBE_DEPLOYMENT="${KUBE_DEPLOYMENT:-cli-proxy-api}"
 KUBE_CONTAINER="${KUBE_CONTAINER:-cli-proxy-api}"
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-180s}"
 PRUNE_OLD_IMAGES="${PRUNE_OLD_IMAGES:-0}"
+KUBE_TARGET_VALIDATED=0
 
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
@@ -124,6 +125,34 @@ prepare_runtime_files() {
   mkdir -p auths home logs
 }
 
+print_k8s_deployments() {
+  log "Deployments in namespace ${KUBE_NAMESPACE}:"
+  kubectl -n "${KUBE_NAMESPACE}" get deployments \
+    -o custom-columns='NAME:.metadata.name,CONTAINERS:.spec.template.spec.containers[*].name,IMAGES:.spec.template.spec.containers[*].image' \
+    || true
+}
+
+validate_k8s_target() {
+  if [[ "${UPDATE_K8S}" != "1" || "${KUBE_TARGET_VALIDATED}" == "1" ]]; then
+    return
+  fi
+
+  need_cmd kubectl
+  log "Checking Kubernetes deployment ${KUBE_NAMESPACE}/${KUBE_DEPLOYMENT}"
+  if ! kubectl -n "${KUBE_NAMESPACE}" get deployment "${KUBE_DEPLOYMENT}" >/dev/null 2>&1; then
+    print_k8s_deployments
+    die "deployment not found: ${KUBE_NAMESPACE}/${KUBE_DEPLOYMENT}. Set KUBE_DEPLOYMENT to the actual deployment name, or set UPDATE_K8S=0 to only build and push."
+  fi
+
+  local containers
+  containers="$(kubectl -n "${KUBE_NAMESPACE}" get deployment "${KUBE_DEPLOYMENT}" -o jsonpath='{.spec.template.spec.containers[*].name}')"
+  if [[ " ${containers} " != *" ${KUBE_CONTAINER} "* ]]; then
+    die "container not found in deployment ${KUBE_NAMESPACE}/${KUBE_DEPLOYMENT}: ${KUBE_CONTAINER}. Available containers: ${containers}. Set KUBE_CONTAINER to the actual container name."
+  fi
+
+  KUBE_TARGET_VALIDATED=1
+}
+
 login_harbor() {
   if [[ "${PUSH_IMAGE}" != "1" ]]; then
     return
@@ -185,7 +214,7 @@ update_k8s() {
     return
   fi
 
-  need_cmd kubectl
+  validate_k8s_target
   log "Updating Kubernetes deployment ${KUBE_NAMESPACE}/${KUBE_DEPLOYMENT}"
   kubectl -n "${KUBE_NAMESPACE}" set image \
     "deployment/${KUBE_DEPLOYMENT}" \
@@ -212,6 +241,7 @@ main() {
 
   prepare_repo
   prepare_runtime_files
+  validate_k8s_target
   login_harbor
   build_image
   push_image
