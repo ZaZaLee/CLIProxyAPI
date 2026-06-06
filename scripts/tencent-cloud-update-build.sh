@@ -49,14 +49,20 @@ need_cmd() {
 }
 
 detect_compose() {
-  if docker compose version >/dev/null 2>&1; then
-    COMPOSE=(docker compose)
-    return
-  fi
   if command -v docker-compose >/dev/null 2>&1; then
     COMPOSE=(docker-compose)
+    log "Using Docker Compose: $(docker-compose version 2>/dev/null | head -n 1)"
     return
   fi
+
+  if docker compose version >/dev/null 2>&1; then
+    local compose_version
+    compose_version="$(docker compose version 2>/dev/null | head -n 1)"
+    COMPOSE=(docker compose)
+    log "Using Docker Compose: ${compose_version}"
+    return
+  fi
+
   die "Docker Compose is not available. Install the Docker Compose plugin or docker-compose."
 }
 
@@ -155,7 +161,14 @@ start_service() {
   fi
 
   log "Starting service with Docker Compose"
-  "${COMPOSE[@]}" -f "${COMPOSE_FILE}" up -d --remove-orphans --pull never
+  local up_flags=(-d --remove-orphans)
+  if "${COMPOSE[@]}" -f "${COMPOSE_FILE}" up --help 2>/dev/null | grep -q -- '--pull'; then
+    up_flags+=(--pull never)
+  else
+    log "Docker Compose up --pull is not supported; continuing without it"
+  fi
+
+  "${COMPOSE[@]}" -f "${COMPOSE_FILE}" up "${up_flags[@]}"
   log "Service is running. Use this command to follow logs:"
   log "cd ${APP_DIR} && ${COMPOSE[*]} -f ${COMPOSE_FILE} logs -f"
 }
@@ -171,8 +184,12 @@ prune_images() {
 main() {
   need_cmd git
   need_cmd docker
-  docker info >/dev/null 2>&1 || die "Docker daemon is not available or current user cannot access it"
   detect_compose
+  if [[ "${COMPOSE[*]}" == "docker-compose" ]]; then
+    docker-compose version >/dev/null 2>&1 || die "docker-compose is not available"
+  else
+    docker info >/dev/null 2>&1 || die "Docker daemon is not available or current user cannot access it"
+  fi
 
   prepare_repo
   prepare_runtime_files
