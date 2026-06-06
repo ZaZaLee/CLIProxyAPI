@@ -14,37 +14,18 @@ stringData:
     {"auths":{"sig-harbor.vancygame.com":{"username":"admin","password":"tG8dS1mP6yA0tB9x","auth":"YWRtaW46dEc4ZFMxbVA2eUEwdEI5eA=="}}}
 ---
 apiVersion: v1
-kind: Secret
+kind: ConfigMap
 metadata:
-  name: cli-proxy-api-secret
+  name: cli-proxy-api-bootstrap-config
   namespace: ai
-type: Opaque
-stringData:
-  HOME_JWT: "replace-with-your-home-jwt"
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: cli-proxy-api-home
-  namespace: ai
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 5Gi
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: cli-proxy-api-logs
-  namespace: ai
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 5Gi
+data:
+  config.yaml: |
+    host: ""
+    port: 8310
+    auth-dir: "~/.cli-proxy-api"
+    logging-to-file: false
+    logs-max-total-size-mb: 0
+    api-keys: []
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -63,35 +44,39 @@ spec:
     spec:
       imagePullSecrets:
         - name: harbor-registry
-      containers:
-        - name: cli-proxy-api
-          image: sig-harbor.vancygame.com/ai/cli-proxy-api:ai-sig
-          imagePullPolicy: Always
-          ports:
-            - containerPort: 8317
-              name: http
-          env:
-            - name: HOME_JWT
-              valueFrom:
-                secretKeyRef:
-                  name: cli-proxy-api-secret
-                  key: HOME_JWT
+      initContainers:
+        - name: prepare-runtime-files
+          image: busybox:1.36
+          imagePullPolicy: IfNotPresent
           command:
             - /bin/sh
             - -eu
             - -c
           args:
             - |
-              if [ -z "${HOME_JWT:-}" ]; then
-                echo "HOME_JWT is required" >&2
-                exit 1
+              mkdir -p /data/auths
+              if [ ! -s /data/config.yaml ]; then
+                cp /bootstrap/config.yaml /data/config.yaml
               fi
-              exec ./CLIProxyAPI -home-jwt "${HOME_JWT}"
           volumeMounts:
-            - name: home
+            - name: data
+              mountPath: /data
+            - name: bootstrap-config
+              mountPath: /bootstrap
+      containers:
+        - name: cli-proxy-api
+          image: sig-harbor.vancygame.com/ai/cli-proxy-api:ai-sig
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8310
+              name: http
+          volumeMounts:
+            - name: data
+              mountPath: /CLIProxyAPI/config.yaml
+              subPath: config.yaml
+            - name: data
               mountPath: /root/.cli-proxy-api
-            - name: logs
-              mountPath: /CLIProxyAPI/logs
+              subPath: auths
           readinessProbe:
             tcpSocket:
               port: http
@@ -103,12 +88,13 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 20
       volumes:
-        - name: home
-          persistentVolumeClaim:
-            claimName: cli-proxy-api-home
-        - name: logs
-          persistentVolumeClaim:
-            claimName: cli-proxy-api-logs
+        - name: data
+          hostPath:
+            path: /opt/AI/CLIProxyAPI
+            type: DirectoryOrCreate
+        - name: bootstrap-config
+          configMap:
+            name: cli-proxy-api-bootstrap-config
 ---
 apiVersion: v1
 kind: Service
@@ -120,5 +106,5 @@ spec:
     app: cli-proxy-api
   ports:
     - name: http
-      port: 8317
+      port: 8310
       targetPort: http
