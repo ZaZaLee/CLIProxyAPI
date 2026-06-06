@@ -1,0 +1,124 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: harbor-registry
+  namespace: ai
+type: kubernetes.io/dockerconfigjson
+stringData:
+  .dockerconfigjson: |
+    {"auths":{"sig-harbor.vancygame.com":{"username":"admin","password":"tG8dS1mP6yA0tB9x","auth":"YWRtaW46dEc4ZFMxbVA2eUEwdEI5eA=="}}}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cli-proxy-api-secret
+  namespace: ai
+type: Opaque
+stringData:
+  HOME_JWT: "replace-with-your-home-jwt"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cli-proxy-api-home
+  namespace: ai
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cli-proxy-api-logs
+  namespace: ai
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cli-proxy-api
+  namespace: ai
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cli-proxy-api
+  template:
+    metadata:
+      labels:
+        app: cli-proxy-api
+    spec:
+      imagePullSecrets:
+        - name: harbor-registry
+      containers:
+        - name: cli-proxy-api
+          image: sig-harbor.vancygame.com/ai/cli-proxy-api:ai-sig
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8317
+              name: http
+          env:
+            - name: HOME_JWT
+              valueFrom:
+                secretKeyRef:
+                  name: cli-proxy-api-secret
+                  key: HOME_JWT
+          command:
+            - /bin/sh
+            - -eu
+            - -c
+          args:
+            - |
+              if [ -z "${HOME_JWT:-}" ]; then
+                echo "HOME_JWT is required" >&2
+                exit 1
+              fi
+              exec ./CLIProxyAPI -home-jwt "${HOME_JWT}"
+          volumeMounts:
+            - name: home
+              mountPath: /root/.cli-proxy-api
+            - name: logs
+              mountPath: /CLIProxyAPI/logs
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+      volumes:
+        - name: home
+          persistentVolumeClaim:
+            claimName: cli-proxy-api-home
+        - name: logs
+          persistentVolumeClaim:
+            claimName: cli-proxy-api-logs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cli-proxy-api
+  namespace: ai
+spec:
+  selector:
+    app: cli-proxy-api
+  ports:
+    - name: http
+      port: 8317
+      targetPort: http
