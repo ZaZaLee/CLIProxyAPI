@@ -28,8 +28,9 @@ CLEAN_UNTRACKED="${CLEAN_UNTRACKED:-0}"
 # Set START_SERVICE=0 to build only.
 START_SERVICE="${START_SERVICE:-1}"
 
-# Set PULL_BASE_IMAGES=0 to avoid refreshing Docker base images during build.
-PULL_BASE_IMAGES="${PULL_BASE_IMAGES:-1}"
+# Set PULL_BASE_IMAGES=1 to refresh Docker base images during build when the
+# installed Docker Compose supports the build --pull flag.
+PULL_BASE_IMAGES="${PULL_BASE_IMAGES:-0}"
 
 # Set PRUNE_OLD_IMAGES=1 to remove dangling images after a successful build.
 PRUNE_OLD_IMAGES="${PRUNE_OLD_IMAGES:-0}"
@@ -131,7 +132,11 @@ build_image() {
 
   local build_flags=()
   if [[ "${PULL_BASE_IMAGES}" == "1" ]]; then
-    build_flags+=(--pull)
+    if "${COMPOSE[@]}" -f "${COMPOSE_FILE}" build --help 2>/dev/null | grep -q -- '--pull'; then
+      build_flags+=(--pull)
+    else
+      log "Docker Compose build --pull is not supported; continuing without it"
+    fi
   fi
 
   "${COMPOSE[@]}" -f "${COMPOSE_FILE}" build \
