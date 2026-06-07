@@ -8,7 +8,7 @@ spec:
   tls:
     - hosts:
         - cpa.cocox.ai
-      secretName: cocox-ai-wildcard
+      secretName: cocox-ai-wildcard-cert-manager
   rules:
     - host: cpa.cocox.ai
       http:
